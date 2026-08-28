@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { motion } from 'motion/react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Droplet,
   FileSpreadsheet,
@@ -16,12 +16,18 @@ import {
   Clock,
   Volume2,
   VolumeX,
-  Play,
   Share2,
   Download,
-  Info
+  Info,
+  Check,
+  Table,
+  UploadCloud,
+  LogOut,
 } from 'lucide-react';
 import { WaterLogEntry, HydrationSettings, GoogleAuthState, DailySummary } from '../types';
+import { GoogleSignInButton } from './GoogleSignInButton';
+import { ConfirmModal } from './ConfirmModal';
+import { fetchSheetLogs } from '../services/googleSheets';
 
 interface DashboardProps {
   logs: WaterLogEntry[];
@@ -57,6 +63,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [showCustomForm, setShowCustomForm] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'today' | 'history' | 'sheets'>('today');
 
+  // Sheet remote data preview state
+  const [remoteSheetRows, setRemoteSheetRows] = useState<string[][] | null>(null);
+  const [isLoadingRemoteRows, setIsLoadingRemoteRows] = useState<boolean>(false);
+
+  // Confirmation dialogs
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState<boolean>(false);
+
   // Today's date string YYYY-MM-DD
   const todayStr = new Date().toISOString().split('T')[0];
   const todayLogs = logs.filter((l) => l.date === todayStr);
@@ -91,6 +105,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const secsRemaining = Math.floor((msRemaining % 60000) / 1000);
   const reminderTimeDisplay = `${minsRemaining}m ${secsRemaining < 10 ? '0' : ''}${secsRemaining}s`;
 
+  // Fetch remote sheet rows when sheets tab is opened
+  useEffect(() => {
+    if (activeTab === 'sheets' && authState.accessToken && authState.spreadsheetId) {
+      loadRemoteSheetData();
+    }
+  }, [activeTab, authState.accessToken, authState.spreadsheetId]);
+
+  const loadRemoteSheetData = async () => {
+    if (!authState.accessToken || !authState.spreadsheetId) return;
+    setIsLoadingRemoteRows(true);
+    try {
+      const rows = await fetchSheetLogs(authState.accessToken, authState.spreadsheetId);
+      setRemoteSheetRows(rows);
+    } catch (e) {
+      console.error('Failed to load sheet rows:', e);
+    } finally {
+      setIsLoadingRemoteRows(false);
+    }
+  };
+
   const handleCustomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseInt(customAmountInput, 10);
@@ -102,8 +136,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
+  const confirmDeleteAction = () => {
+    if (confirmDeleteId) {
+      onDeleteLog(confirmDeleteId);
+      setConfirmDeleteId(null);
+    }
+  };
+
   return (
-    <div id="hydration-dashboard-root" className="h-full flex flex-col bg-slate-900/90 text-slate-100 backdrop-blur-xl border border-slate-700/70 rounded-2xl shadow-2xl overflow-hidden">
+    <div
+      id="hydration-dashboard-root"
+      className="h-full flex flex-col bg-slate-900/90 text-slate-100 backdrop-blur-xl border border-slate-700/70 rounded-2xl shadow-2xl overflow-hidden"
+    >
       {/* Windows-like Header / Window Bar */}
       <div className="bg-slate-800/90 border-b border-slate-700/80 px-4 py-2.5 flex items-center justify-between select-none">
         <div className="flex items-center gap-2.5">
@@ -118,7 +162,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </span>
             </h1>
             <p className="text-[11px] text-slate-400">
-              Desktop Water Tracker with Interactive Cartoon Companion
+              Desktop Water Tracker with Interactive Walking Companion & Google Sheets
             </p>
           </div>
         </div>
@@ -201,7 +245,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>{remainingMl > 0 ? `${remainingMl} ml left` : '🎉 Goal Achieved!'}</span>
-              <span>{todayLogs.length} sips taken today</span>
+              <span>{todayLogs.length} sips logged</span>
             </div>
           </div>
 
@@ -223,19 +267,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 {reminderTimeDisplay}
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                {settings.characterName || 'Lily'} is walking on screen & will prompt you soon!
+                {settings.characterName || 'Lily'} will prompt you with Option 1 (+100ml) or Option 2 (Snooze).
               </p>
             </div>
 
             <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between">
-              <span className="text-xs text-slate-400">Character Outfit:</span>
+              <span className="text-xs text-slate-400">Companion Speed:</span>
               <span className="text-xs font-semibold text-sky-300 capitalize">
-                {settings.characterOutfit}
+                {settings.characterSpeed}
               </span>
             </div>
           </div>
 
-          {/* 3. Google Sheets Connection & Sync Card */}
+          {/* 3. Google Sheets Connection & Live Sync Card */}
           <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 flex flex-col justify-between">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -245,7 +289,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {authState.accessToken ? (
                 <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
                   <CheckCircle2 className="w-3 h-3" />
-                  Synced
+                  Connected
                 </span>
               ) : (
                 <span className="text-[11px] font-semibold text-slate-400 bg-slate-700/60 px-2 py-0.5 rounded-md">
@@ -277,36 +321,43 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     onClick={onSyncGoogleSheets}
                     disabled={authState.isSyncing}
                     className="p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 disabled:opacity-50"
-                    title="Force sync now"
+                    title="Force sync all logs to sheet now"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${authState.isSyncing ? 'animate-spin text-sky-400' : ''}`} />
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="space-y-2">
-                <p className="text-xs text-slate-400">
-                  Automatically log every water intake to your personal Google Sheet spreadsheet.
+              <div className="space-y-2.5">
+                <p className="text-xs text-slate-400 leading-snug">
+                  Connect Google Sheets to automatically record each drink to your private spreadsheet.
                 </p>
-                <button
-                  id="btn-connect-google-sheets"
-                  onClick={onConnectGoogle}
-                  disabled={authState.isConnecting}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all transform active:scale-95"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>{authState.isConnecting ? 'Connecting...' : 'Connect Google Sheet'}</span>
-                </button>
+                <div>
+                  <GoogleSignInButton
+                    onClick={onConnectGoogle}
+                    isLoading={authState.isConnecting}
+                    className="w-full text-xs py-2"
+                    label="Link Google Sheets"
+                  />
+                </div>
               </div>
             )}
 
             <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-[11px] text-slate-400">
-              <span>{authState.lastSyncTime ? `Last sync: ${new Date(authState.lastSyncTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Local backup active'}</span>
+              <span>
+                {authState.lastSyncTime
+                  ? `Synced ${new Date(authState.lastSyncTime).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}`
+                  : 'Local cache active'}
+              </span>
               {authState.accessToken && (
                 <button
-                  onClick={onDisconnectGoogle}
-                  className="text-rose-400 hover:underline text-[10px]"
+                  onClick={() => setShowDisconnectConfirm(true)}
+                  className="text-rose-400 hover:underline text-[10px] flex items-center gap-0.5"
                 >
+                  <LogOut className="w-3 h-3" />
                   Disconnect
                 </button>
               )}
@@ -337,14 +388,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </button>
           </div>
 
-          {/* Quick Buttons Grid (Including +100ml matching the reminder prompt) */}
+          {/* Quick Buttons Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <button
               id="btn-quick-log-100"
-              onClick={() => onAddWater(100, 'yes_100', 'Quick Sip (+100ml)')}
+              onClick={() => onAddWater(100, 'yes_100', 'Option 1 (+100ml)')}
               className="group relative bg-gradient-to-b from-sky-500/20 to-sky-600/30 hover:from-sky-500/30 hover:to-sky-600/40 border border-sky-500/40 hover:border-sky-400 text-sky-200 rounded-xl p-3 flex flex-col items-center justify-center gap-1 transition-all active:scale-95 shadow-sm"
             >
-              <span className="text-[11px] font-bold uppercase tracking-wider text-sky-300">Option 1</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300">Option 1</span>
               <span className="text-base font-extrabold text-white flex items-center gap-1">
                 <Droplet className="w-4 h-4 text-sky-400 fill-sky-400 group-hover:scale-110 transition-transform" />
                 +100 ml
@@ -354,7 +405,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             <button
               id="btn-quick-log-200"
-              onClick={() => onAddWater(200, 'quick_log', 'Cup of water (+200ml)')}
+              onClick={() => onAddWater(200, 'quick_log', 'Small Cup (+200ml)')}
               className="group bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 hover:border-slate-600 text-slate-200 rounded-xl p-3 flex flex-col items-center justify-center gap-1 transition-all active:scale-95"
             >
               <span className="text-[11px] font-semibold text-slate-400">Cup</span>
@@ -362,12 +413,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <Droplet className="w-4 h-4 text-blue-400 group-hover:scale-110 transition-transform" />
                 +200 ml
               </span>
-              <span className="text-[10px] text-slate-400">Small Cup</span>
+              <span className="text-[10px] text-slate-400">Coffee / Tea Cup</span>
             </button>
 
             <button
               id="btn-quick-log-250"
-              onClick={() => onAddWater(250, 'quick_log', 'Coffee mug / large glass (+250ml)')}
+              onClick={() => onAddWater(250, 'quick_log', 'Large mug (+250ml)')}
               className="group bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700 hover:border-slate-600 text-slate-200 rounded-xl p-3 flex flex-col items-center justify-center gap-1 transition-all active:scale-95"
             >
               <span className="text-[11px] font-semibold text-slate-400">Mug</span>
@@ -375,7 +426,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <Droplet className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
                 +250 ml
               </span>
-              <span className="text-[10px] text-slate-400">Large Mug</span>
+              <span className="text-[10px] text-slate-400">Large Glass</span>
             </button>
 
             <button
@@ -482,7 +533,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 }`}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>Google Sheets View</span>
+                <span>Google Sheets Live View</span>
               </button>
             </div>
           </div>
@@ -526,13 +577,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               +{entry.amount} ml
                             </span>
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">
-                              {entry.type === 'yes_100' ? 'Reminder Yes' : entry.type}
+                              {entry.type === 'yes_100' ? 'Option 1 (+100ml)' : entry.type}
                             </span>
-                            {entry.syncedToSheet && (
+                            {entry.syncedToSheet ? (
                               <span className="text-[10px] text-emerald-400 flex items-center gap-0.5">
                                 <CheckCircle2 className="w-3 h-3" />
-                                Synced
+                                Synced to Sheet
                               </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400">Local log</span>
                             )}
                           </div>
                           <p className="text-[11px] text-slate-400">
@@ -542,7 +595,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       </div>
 
                       <button
-                        onClick={() => onDeleteLog(entry.id)}
+                        onClick={() => setConfirmDeleteId(entry.id)}
                         className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-slate-700 transition-colors"
                         title="Delete this entry"
                       >
@@ -604,77 +657,150 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
           )}
 
-          {/* Tab 3: Google Sheets Details */}
+          {/* Tab 3: Google Sheets Details & Live Viewer */}
           {activeTab === 'sheets' && (
             <div className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
                   <div>
-                    <h3 className="text-sm font-bold text-white">Google Sheet Storage Configuration</h3>
-                    <p className="text-xs text-slate-400">Spreadsheet name: 💧 Water Hydration Log (Desktop Companion)</p>
+                    <h3 className="text-sm font-bold text-white">Google Sheet Storage & Sync</h3>
+                    <p className="text-xs text-slate-400">Spreadsheet: 💧 Water Hydration Log (Desktop Companion)</p>
                   </div>
                 </div>
 
                 {authState.accessToken && (
-                  <button
-                    onClick={onSyncGoogleSheets}
-                    disabled={authState.isSyncing}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${authState.isSyncing ? 'animate-spin' : ''}`} />
-                    <span>{authState.isSyncing ? 'Syncing...' : 'Sync All Logs'}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={loadRemoteSheetData}
+                      disabled={isLoadingRemoteRows}
+                      className="p-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 transition-colors"
+                      title="Refresh sheet data"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isLoadingRemoteRows ? 'animate-spin' : ''}`} />
+                    </button>
+                    <button
+                      onClick={onSyncGoogleSheets}
+                      disabled={authState.isSyncing}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors disabled:opacity-50"
+                    >
+                      <UploadCloud className={`w-3.5 h-3.5 ${authState.isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{authState.isSyncing ? 'Syncing...' : 'Sync All Logs'}</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
               {authState.accessToken ? (
-                <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/80 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Status:</span>
-                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Live Connected
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Connected User:</span>
-                    <span className="text-white font-medium">{authState.userEmail || 'Google Account'}</span>
-                  </div>
-                  {authState.spreadsheetId && (
+                <div className="space-y-3">
+                  <div className="bg-slate-900/80 rounded-xl p-3 border border-slate-700/80 space-y-2 text-xs">
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Spreadsheet ID:</span>
-                      <span className="text-slate-300 font-mono text-[11px] truncate max-w-[200px]">
-                        {authState.spreadsheetId}
+                      <span className="text-slate-400">Connection Status:</span>
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Live Synchronized with Google Account
                       </span>
                     </div>
-                  )}
-                  {authState.spreadsheetUrl && (
-                    <div className="pt-2">
-                      <a
-                        href={authState.spreadsheetUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-bold transition-colors"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        Open in Google Sheets App / Web
-                      </a>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">User Account:</span>
+                      <span className="text-white font-medium">{authState.userEmail || 'Connected Google Account'}</span>
                     </div>
-                  )}
+                    {authState.spreadsheetId && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">Spreadsheet ID:</span>
+                        <span className="text-slate-300 font-mono text-[11px] truncate max-w-[220px]">
+                          {authState.spreadsheetId}
+                        </span>
+                      </div>
+                    )}
+                    {authState.spreadsheetUrl && (
+                      <div className="pt-2 flex items-center gap-2">
+                        <a
+                          href={authState.spreadsheetUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Open Spreadsheet in Google Sheets
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Remote Sheet Data Table Preview */}
+                  <div className="bg-slate-900/90 rounded-xl border border-slate-700/70 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Table className="w-3.5 h-3.5 text-sky-400" />
+                        Live Rows Preview from Google Sheets
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        {remoteSheetRows ? `${remoteSheetRows.length} rows recorded` : 'Loading rows...'}
+                      </span>
+                    </div>
+
+                    {isLoadingRemoteRows ? (
+                      <div className="py-6 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                        <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
+                        <span>Loading Google Sheets entries...</span>
+                      </div>
+                    ) : remoteSheetRows && remoteSheetRows.length > 0 ? (
+                      <div className="overflow-x-auto max-h-48 custom-scrollbar">
+                        <table className="w-full text-[11px] text-left border-collapse">
+                          <thead className="bg-slate-800 text-slate-300 uppercase tracking-wider text-[9px] sticky top-0">
+                            <tr>
+                              <th className="p-1.5 border-b border-slate-700">Timestamp</th>
+                              <th className="p-1.5 border-b border-slate-700">Date</th>
+                              <th className="p-1.5 border-b border-slate-700">Time</th>
+                              <th className="p-1.5 border-b border-slate-700">Amount (ml)</th>
+                              <th className="p-1.5 border-b border-slate-700">Total (ml)</th>
+                              <th className="p-1.5 border-b border-slate-700">Goal %</th>
+                              <th className="p-1.5 border-b border-slate-700">Type</th>
+                              <th className="p-1.5 border-b border-slate-700">Note</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800 text-slate-200">
+                            {remoteSheetRows.slice(-15).reverse().map((row, rIdx) => (
+                              <tr key={rIdx} className="hover:bg-slate-800/50">
+                                <td className="p-1.5 font-mono text-[10px] text-slate-400">{row[0] || '-'}</td>
+                                <td className="p-1.5">{row[1] || '-'}</td>
+                                <td className="p-1.5">{row[2] || '-'}</td>
+                                <td className="p-1.5 font-bold text-sky-300">+{row[3]} ml</td>
+                                <td className="p-1.5 text-slate-300">{row[4]} ml</td>
+                                <td className="p-1.5 text-emerald-400 font-semibold">{row[6]}</td>
+                                <td className="p-1.5 text-slate-400 text-[10px]">{row[7]}</td>
+                                <td className="p-1.5 text-slate-400 text-[10px] truncate max-w-[120px]">{row[8]}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="py-4 text-center text-xs text-slate-400">
+                        No rows recorded yet in this spreadsheet. Log a drink or click "Sync All Logs" above!
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
-                <div className="text-center py-4 bg-slate-900/60 rounded-xl border border-slate-700/60 p-4">
-                  <p className="text-xs text-slate-300 mb-3">
-                    Connect your Google account to automatically export and sync your water intake logs into a clean, formatted Google Sheet in real time.
+                <div className="text-center py-6 bg-slate-900/60 rounded-xl border border-slate-700/60 p-5">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto mb-3">
+                    <FileSpreadsheet className="w-6 h-6" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white mb-1">
+                    Connect Google Sheets to Enable Real-Time Cloud Logging
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto mb-4">
+                    With permission from your Google account, every water intake logged by you or your walking companion will be securely appended to your personal Google Sheet.
                   </p>
-                  <button
-                    onClick={onConnectGoogle}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
-                  >
-                    <FileSpreadsheet className="w-4 h-4" />
-                    Sign in with Google & Link Sheet
-                  </button>
+                  <div>
+                    <GoogleSignInButton
+                      onClick={onConnectGoogle}
+                      isLoading={authState.isConnecting}
+                      label="Sign in with Google & Link Sheet"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -682,7 +808,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <div className="text-xs text-slate-400 space-y-1">
                 <div className="font-semibold text-slate-300 flex items-center gap-1">
                   <Info className="w-3.5 h-3.5 text-sky-400" />
-                  Synced Columns Structure in Google Sheets:
+                  Spreadsheet Column Architecture:
                 </div>
                 <p className="font-mono text-[11px] text-slate-400 bg-slate-900/80 p-2 rounded-lg border border-slate-700/60">
                   Timestamp • Date • Time • Intake Amount (ml) • Daily Total (ml) • Daily Goal (ml) • Goal Progress (%) • Log Type • Character Note
@@ -692,6 +818,33 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
       </div>
+
+      {/* Confirmation modal for single entry deletion */}
+      <ConfirmModal
+        isOpen={!!confirmDeleteId}
+        title="Delete Water Log Entry?"
+        description="Are you sure you want to remove this water intake entry from your logs? This action cannot be undone."
+        confirmLabel="Delete Entry"
+        cancelLabel="Cancel"
+        isDestructive={true}
+        onConfirm={confirmDeleteAction}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
+
+      {/* Confirmation modal for disconnecting Google account */}
+      <ConfirmModal
+        isOpen={showDisconnectConfirm}
+        title="Disconnect Google Sheets?"
+        description="This will unlink your Google account from the desktop companion. Your existing Google Sheet in Google Drive will remain safe."
+        confirmLabel="Disconnect"
+        cancelLabel="Keep Connected"
+        isDestructive={false}
+        onConfirm={() => {
+          onDisconnectGoogle();
+          setShowDisconnectConfirm(false);
+        }}
+        onCancel={() => setShowDisconnectConfirm(false)}
+      />
     </div>
   );
 };

@@ -4,10 +4,10 @@ const SHEETS_API_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3/files';
 const USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo';
 
-const SPREADSHEET_TITLE = '💧 Water Hydration Log (Desktop Companion)';
-const SHEET_NAME = 'Hydration Logs';
+export const SPREADSHEET_TITLE = '💧 Water Hydration Log (Desktop Companion)';
+export const SHEET_NAME = 'Hydration Logs';
 
-const HEADERS = [
+export const SHEET_HEADERS = [
   'Timestamp',
   'Date',
   'Time',
@@ -16,7 +16,7 @@ const HEADERS = [
   'Daily Goal (ml)',
   'Goal Progress (%)',
   'Log Type',
-  'Character Note'
+  'Character Note',
 ];
 
 export async function fetchUserInfo(accessToken: string) {
@@ -35,7 +35,7 @@ export async function fetchUserInfo(accessToken: string) {
 /**
  * Searches for an existing Water Hydration Log spreadsheet in user's Google Drive.
  */
-export async function findExistingSpreadsheet(accessToken: string): Promise<string | null> {
+export async function findExistingSpreadsheet(accessToken: string): Promise<{ id: string; url: string; name: string } | null> {
   try {
     const query = encodeURIComponent(
       `name = '${SPREADSHEET_TITLE}' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`
@@ -47,7 +47,12 @@ export async function findExistingSpreadsheet(accessToken: string): Promise<stri
     if (!res.ok) return null;
     const data = await res.json();
     if (data.files && data.files.length > 0) {
-      return data.files[0].id;
+      const file = data.files[0];
+      return {
+        id: file.id,
+        url: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
+        name: file.name,
+      };
     }
     return null;
   } catch (err) {
@@ -70,7 +75,7 @@ export async function createHydrationSpreadsheet(accessToken: string): Promise<{
           title: SHEET_NAME,
           gridProperties: {
             frozenRowCount: 1,
-            columnCount: 12,
+            columnCount: 10,
           },
         },
       },
@@ -108,7 +113,7 @@ async function setupSpreadsheetHeader(accessToken: string, spreadsheetId: string
   // 1. Add Header row values
   const range = `${SHEET_NAME}!A1:I1`;
   const appendUrl = `${SHEETS_API_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`;
-  
+
   await fetch(appendUrl, {
     method: 'PUT',
     headers: {
@@ -116,11 +121,11 @@ async function setupSpreadsheetHeader(accessToken: string, spreadsheetId: string
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      values: [HEADERS],
+      values: [SHEET_HEADERS],
     }),
   });
 
-  // 2. Format header with soft cyan-blue background and bold white/dark text
+  // 2. Format header with soft ocean-blue background and bold white text
   try {
     const formatPayload = {
       requests: [
@@ -131,11 +136,11 @@ async function setupSpreadsheetHeader(accessToken: string, spreadsheetId: string
               startRowIndex: 0,
               endRowIndex: 1,
               startColumnIndex: 0,
-              endColumnIndex: HEADERS.length,
+              endColumnIndex: SHEET_HEADERS.length,
             },
             cell: {
               userEnteredFormat: {
-                backgroundColor: { red: 0.12, green: 0.53, blue: 0.9, alpha: 1 }, // Ocean Blue
+                backgroundColor: { red: 0.08, green: 0.52, blue: 0.88, alpha: 1 }, // Ocean Sky Blue
                 textFormat: {
                   foregroundColor: { red: 1, green: 1, blue: 1, alpha: 1 },
                   fontSize: 11,
@@ -153,7 +158,7 @@ async function setupSpreadsheetHeader(accessToken: string, spreadsheetId: string
               sheetId: 0,
               dimension: 'COLUMNS',
               startIndex: 0,
-              endIndex: HEADERS.length,
+              endIndex: SHEET_HEADERS.length,
             },
           },
         },
@@ -187,7 +192,7 @@ export async function appendWaterLogsToSheet(
     const pct = entry.dailyGoal > 0 ? `${Math.min(100, Math.round((entry.totalDailySoFar / entry.dailyGoal) * 100))}%` : '0%';
     const typeLabel =
       entry.type === 'yes_100'
-        ? 'Yes, +100ml'
+        ? 'Yes (+100ml)'
         : entry.type === 'snooze_logged'
         ? 'Snooze Logged'
         : entry.type === 'quick_log'
@@ -207,7 +212,7 @@ export async function appendWaterLogsToSheet(
       entry.dailyGoal,
       pct,
       typeLabel,
-      entry.note || 'Hydrated via Desktop Companion'
+      entry.note || 'Hydrated with Desktop Companion',
     ];
   });
 
@@ -234,7 +239,7 @@ export async function appendWaterLogsToSheet(
 }
 
 /**
- * Fetches recent logs from the Google Sheet to verify sync.
+ * Fetches recent logs directly from the Google Sheet.
  */
 export async function fetchSheetLogs(accessToken: string, spreadsheetId: string) {
   try {
@@ -250,4 +255,24 @@ export async function fetchSheetLogs(accessToken: string, spreadsheetId: string)
     console.error('Error fetching sheet logs:', err);
     return null;
   }
+}
+
+/**
+ * Clears data rows in the spreadsheet with destructive warning confirmation.
+ */
+export async function clearSheetDataRows(accessToken: string, spreadsheetId: string) {
+  const range = `${SHEET_NAME}!A2:I1000`;
+  const url = `${SHEETS_API_BASE}/${spreadsheetId}/values/${encodeURIComponent(range)}:clear`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Failed to clear sheet data: ${errText}`);
+  }
+  return true;
 }

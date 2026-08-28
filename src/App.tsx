@@ -10,15 +10,20 @@ import {
   HydrationSettings,
   CharacterState,
   GoogleAuthState,
-  CharacterAction,
 } from './types';
 import { soundManager } from './utils/audio';
 import {
-  fetchUserInfo,
   findExistingSpreadsheet,
   createHydrationSpreadsheet,
   appendWaterLogsToSheet,
+  fetchUserInfo,
 } from './services/googleSheets';
+import {
+  initAuth,
+  googleSignIn,
+  logout as firebaseLogout,
+  getAccessToken,
+} from './services/firebaseAuth';
 import { WalkingCharacter } from './components/WalkingCharacter';
 import { Dashboard } from './components/Dashboard';
 import { WindowsDesktop } from './components/WindowsDesktop';
@@ -94,20 +99,24 @@ export default function App() {
     nextReminderTimestamp: Date.now() + (settings.reminderIntervalMinutes || 30) * 60 * 1000,
   }));
 
-  // Google Sheets OAuth state
-  const [authState, setAuthState] = useState<GoogleAuthState>({
-    accessToken: null,
-    expiresAt: null,
-    userEmail: null,
-    userName: null,
-    userPicture: null,
-    spreadsheetId: null,
-    spreadsheetUrl: null,
-    isConnecting: false,
-    isSyncing: false,
-    lastSyncTime: null,
-    syncStatus: 'idle',
-    errorMessage: null,
+  // Google Sheets Auth state
+  const [authState, setAuthState] = useState<GoogleAuthState>(() => {
+    const savedSheetId = localStorage.getItem('aqua_saved_sheet_id');
+    const savedSheetUrl = localStorage.getItem('aqua_saved_sheet_url');
+    return {
+      accessToken: null,
+      expiresAt: null,
+      userEmail: null,
+      userName: null,
+      userPicture: null,
+      spreadsheetId: savedSheetId || null,
+      spreadsheetUrl: savedSheetUrl || null,
+      isConnecting: false,
+      isSyncing: false,
+      lastSyncTime: null,
+      syncStatus: 'idle',
+      errorMessage: null,
+    };
   });
 
   // UI Window and View States
@@ -139,6 +148,62 @@ export default function App() {
     }
   }, [logs]);
 
+  // Listen to Auth State Changes
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      async (user, token) => {
+        try {
+          let sheetId = authState.spreadsheetId;
+          let sheetUrl = authState.spreadsheetUrl;
+
+          if (!sheetId) {
+            const existing = await findExistingSpreadsheet(token);
+            if (existing) {
+              sheetId = existing.id;
+              sheetUrl = existing.url;
+            } else {
+              const created = await createHydrationSpreadsheet(token);
+              sheetId = created.id;
+              sheetUrl = created.url;
+            }
+            if (sheetId) {
+              localStorage.setItem('aqua_saved_sheet_id', sheetId);
+              if (sheetUrl) localStorage.setItem('aqua_saved_sheet_url', sheetUrl);
+            }
+          }
+
+          setAuthState((prev) => ({
+            ...prev,
+            accessToken: token,
+            userEmail: user.email || null,
+            userName: user.displayName || null,
+            userPicture: user.photoURL || null,
+            spreadsheetId: sheetId,
+            spreadsheetUrl: sheetUrl,
+            isConnecting: false,
+            syncStatus: 'success',
+            errorMessage: null,
+          }));
+        } catch (err: any) {
+          console.error('Error during initAuth sheet preparation:', err);
+        }
+      },
+      () => {
+        // Logged out
+        setAuthState((prev) => ({
+          ...prev,
+          accessToken: null,
+          userEmail: null,
+          userName: null,
+          userPicture: null,
+          isConnecting: false,
+        }));
+      }
+    );
+
+    return () => unsubscribe();
+  }, [authState.spreadsheetId, authState.spreadsheetUrl]);
+
   // Today's total intake
   const todayStr = new Date().toISOString().split('T')[0];
   const todayLogs = logs.filter((l) => l.date === todayStr);
@@ -154,7 +219,7 @@ export default function App() {
       lastTime = time;
 
       setCharacterState((prev) => {
-        // If character is reminding, drinking, or snoozed, pause walking movement
+        // If character is reminding, drinking, or snoozed, pause horizontal walking movement
         if (prev.action !== 'walking' || prev.reminderActive) {
           return prev;
         }
@@ -288,8 +353,8 @@ export default function App() {
           setTimeout(() => soundManager.playSuccessFanfare(), 300);
         }
         confetti({
-          particleCount: 80,
-          spread: 70,
+          particleCount: 90,
+          spread: 75,
           origin: { y: 0.6 },
           colors: ['#38bdf8', '#0284c7', '#f43f5e', '#fbbf24'],
         });
@@ -386,73 +451,62 @@ export default function App() {
     setLogs((prev) => prev.filter((l) => l.id !== id));
   };
 
-  // Action: Connect Google Sheets via OAuth
+  // Action: Connect Google Sheets via Firebase Auth & OAuth
   const handleConnectGoogle = async () => {
     setAuthState((prev) => ({ ...prev, isConnecting: true, errorMessage: null }));
 
     try {
-      if (typeof window === 'undefined' || !(window as any).google?.accounts?.oauth2) {
-        throw new Error(
-          'Google Identity Services script is loading. Please check your internet connection and try again.'
-        );
+      const result = await googleSignIn();
+      if (!result) {
+        setAuthState((prev) => ({ ...prev, isConnecting: false }));
+        return;
       }
 
-      const client = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: (import.meta as any).env.VITE_GOOGLE_CLIENT_ID || '331733064312-gen-lang-client.apps.googleusercontent.com',
-        scope:
-          'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file',
-        callback: async (tokenResponse: any) => {
-          if (tokenResponse.error) {
-            setAuthState((prev) => ({
-              ...prev,
-              isConnecting: false,
-              errorMessage: tokenResponse.error_description || tokenResponse.error,
-            }));
-            return;
-          }
+      const { user, accessToken } = result;
 
-          const token = tokenResponse.access_token;
-          const expiresIn = tokenResponse.expires_in || 3600;
+      // Find or create hydration spreadsheet in Drive
+      let sheetId = authState.spreadsheetId;
+      let sheetUrl = authState.spreadsheetUrl;
 
-          // Fetch user info
-          const userInfo = await fetchUserInfo(token);
+      if (!sheetId) {
+        const existing = await findExistingSpreadsheet(accessToken);
+        if (existing) {
+          sheetId = existing.id;
+          sheetUrl = existing.url;
+        } else {
+          const created = await createHydrationSpreadsheet(accessToken);
+          sheetId = created.id;
+          sheetUrl = created.url;
+        }
+      }
 
-          // Find or create hydration spreadsheet
-          let sheetId = await findExistingSpreadsheet(token);
-          let sheetUrl = sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}/edit` : null;
+      if (sheetId) {
+        localStorage.setItem('aqua_saved_sheet_id', sheetId);
+        if (sheetUrl) localStorage.setItem('aqua_saved_sheet_url', sheetUrl);
+      }
 
-          if (!sheetId) {
-            const created = await createHydrationSpreadsheet(token);
-            sheetId = created.id;
-            sheetUrl = created.url;
-          }
-
-          setAuthState({
-            accessToken: token,
-            expiresAt: Date.now() + expiresIn * 1000,
-            userEmail: userInfo?.email || null,
-            userName: userInfo?.name || null,
-            userPicture: userInfo?.picture || null,
-            spreadsheetId: sheetId,
-            spreadsheetUrl: sheetUrl,
-            isConnecting: false,
-            isSyncing: false,
-            lastSyncTime: Date.now(),
-            syncStatus: 'success',
-            errorMessage: null,
-          });
-
-          // Sync any unsynced local logs to the sheet
-          const unsynced = logs.filter((l) => !l.syncedToSheet);
-          if (unsynced.length > 0 && sheetId) {
-            syncLogsToSheet(unsynced, token, sheetId);
-          }
-        },
+      setAuthState({
+        accessToken,
+        expiresAt: Date.now() + 3600 * 1000,
+        userEmail: user.email || null,
+        userName: user.displayName || null,
+        userPicture: user.photoURL || null,
+        spreadsheetId: sheetId,
+        spreadsheetUrl: sheetUrl,
+        isConnecting: false,
+        isSyncing: false,
+        lastSyncTime: Date.now(),
+        syncStatus: 'success',
+        errorMessage: null,
       });
 
-      client.requestAccessToken();
+      // Sync any unsynced local logs to the sheet
+      const unsynced = logs.filter((l) => !l.syncedToSheet);
+      if (unsynced.length > 0 && sheetId) {
+        syncLogsToSheet(unsynced, accessToken, sheetId);
+      }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to initialize Google Sign-in';
+      const message = err instanceof Error ? err.message : 'Failed to sign in with Google';
       console.error('Google Sign-in error:', err);
       setAuthState((prev) => ({
         ...prev,
@@ -472,7 +526,15 @@ export default function App() {
   };
 
   // Action: Disconnect Google
-  const handleDisconnectGoogle = () => {
+  const handleDisconnectGoogle = async () => {
+    try {
+      await firebaseLogout();
+    } catch (e) {
+      console.warn('Error during logout:', e);
+    }
+    localStorage.removeItem('aqua_saved_sheet_id');
+    localStorage.removeItem('aqua_saved_sheet_url');
+
     setAuthState({
       accessToken: null,
       expiresAt: null,
