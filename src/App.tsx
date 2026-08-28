@@ -458,7 +458,7 @@ export default function App() {
     try {
       const result = await googleSignIn();
       if (!result) {
-        setAuthState((prev) => ({ ...prev, isConnecting: false }));
+        setAuthState((prev) => ({ ...prev, isConnecting: false, errorMessage: null }));
         return;
       }
 
@@ -506,8 +506,7 @@ export default function App() {
         syncLogsToSheet(unsynced, accessToken, sheetId);
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to sign in with Google';
-      console.error('Google Sign-in error:', err);
+      const message = err instanceof Error ? err.message : 'Failed to connect Google Sheets';
       setAuthState((prev) => ({
         ...prev,
         isConnecting: false,

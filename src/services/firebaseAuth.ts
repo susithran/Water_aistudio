@@ -60,6 +60,21 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     cachedAccessToken = credential.accessToken;
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
+    // Handle standard user-initiated cancellation or popup closed gracefully
+    if (
+      error?.code === 'auth/popup-closed-by-user' ||
+      error?.code === 'auth/cancelled-popup-request' ||
+      error?.message?.includes('popup-closed-by-user') ||
+      error?.message?.includes('cancelled-popup-request')
+    ) {
+      // User closed the popup window or cancelled sign-in intentionally
+      return null;
+    }
+
+    if (error?.code === 'auth/popup-blocked') {
+      throw new Error('Sign-in popup was blocked by your browser. Please allow popups for this site and try again.');
+    }
+
     console.error('Sign in error:', error);
     throw error;
   } finally {
