@@ -1,0 +1,6 @@
+{
+  "name": "Water Reminder & Logger",
+  "description": "A desktop companion app with an animated walking character reminding you to drink water, with quick logging and a synced Google Sheets dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
